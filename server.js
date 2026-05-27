@@ -247,6 +247,7 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get("/", (_req, res) => res.json({ ok: true, service: "zoho-mail-mcp" }));
 app.get("/health", (_req, res) => res.json({ ok: true, email: EMAIL, region: REGION }));
 
 // Session store: sessionId -> { server, transport }
