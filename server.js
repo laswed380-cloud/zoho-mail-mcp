@@ -10,7 +10,13 @@ const EMAIL = process.env.ZOHO_EMAIL;
 const PASSWORD = process.env.ZOHO_APP_PASSWORD;
 const REGION = (process.env.ZOHO_REGION || "in").toLowerCase();
 const API_KEY = process.env.MCP_API_KEY;
+const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID || "claude-ai";
+const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET || API_KEY;
 const PORT = parseInt(process.env.PORT || "3000", 10);
+
+// OAuth state: code → { clientId, expiresAt }  |  token → { clientId, expiresAt }
+const authCodes = new Map();
+const accessTokens = new Map();
 
 if (!EMAIL || !PASSWORD) {
   console.error("Missing ZOHO_EMAIL or ZOHO_APP_PASSWORD");
@@ -237,18 +243,87 @@ function createMcpServer() {
 const app = express();
 app.use(express.json());
 
-// Auth middleware
+// Auth middleware — accepts API key OR valid OAuth Bearer token
 app.use((req, res, next) => {
-  if (req.path === "/health") return next();
-  if (API_KEY) {
-    const key = req.headers["x-api-key"] || req.headers.authorization?.replace(/^Bearer\s+/i, "");
-    if (key !== API_KEY) return res.status(401).json({ error: "Unauthorized" });
+  const skip = ["/health", "/", "/.well-known/oauth-authorization-server",
+                "/oauth/authorize", "/oauth/token"];
+  if (skip.some(p => req.path === p || req.path.startsWith(p))) return next();
+
+  const header = req.headers.authorization || "";
+  const apiKey = req.headers["x-api-key"];
+
+  // Direct API key (for Claude Code / testing)
+  if (API_KEY && apiKey === API_KEY) return next();
+
+  // OAuth Bearer token
+  const bearer = header.replace(/^Bearer\s+/i, "");
+  if (bearer) {
+    const entry = accessTokens.get(bearer);
+    if (entry && entry.expiresAt > Date.now()) return next();
+    return res.status(401).json({ error: "invalid_token" });
   }
-  next();
+
+  res.status(401).json({ error: "unauthorized" });
 });
 
 app.get("/", (_req, res) => res.json({ ok: true, service: "zoho-mail-mcp" }));
 app.get("/health", (_req, res) => res.json({ ok: true, email: EMAIL, region: REGION }));
+
+// ─── OAuth 2.0 endpoints (required for Claude.ai MCP connector) ─────────────
+
+// Discovery metadata
+app.get("/.well-known/oauth-authorization-server", (req, res) => {
+  const base = `${req.protocol}://${req.get("host")}`;
+  res.json({
+    issuer: base,
+    authorization_endpoint: `${base}/oauth/authorize`,
+    token_endpoint: `${base}/oauth/token`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "client_credentials"],
+    code_challenge_methods_supported: ["S256", "plain"],
+  });
+});
+
+// Authorization endpoint — auto-approves for this personal single-user server
+app.get("/oauth/authorize", (req, res) => {
+  const { client_id, redirect_uri, state, response_type } = req.query;
+  if (client_id !== OAUTH_CLIENT_ID) return res.status(401).send("Unknown client");
+  const code = randomUUID();
+  authCodes.set(code, { clientId: client_id, expiresAt: Date.now() + 60_000 });
+  const url = new URL(redirect_uri);
+  url.searchParams.set("code", code);
+  if (state) url.searchParams.set("state", state);
+  res.redirect(url.toString());
+});
+
+// Token endpoint
+app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => {
+  const { grant_type, code, client_id, client_secret, redirect_uri } = req.body;
+
+  // Validate client
+  if (client_id !== OAUTH_CLIENT_ID || client_secret !== OAUTH_CLIENT_SECRET) {
+    return res.status(401).json({ error: "invalid_client" });
+  }
+
+  if (grant_type === "authorization_code") {
+    const entry = authCodes.get(code);
+    if (!entry || entry.expiresAt < Date.now()) {
+      return res.status(400).json({ error: "invalid_grant" });
+    }
+    authCodes.delete(code);
+    const token = randomUUID();
+    accessTokens.set(token, { clientId: client_id, expiresAt: Date.now() + 86_400_000 });
+    return res.json({ access_token: token, token_type: "bearer", expires_in: 86400 });
+  }
+
+  if (grant_type === "client_credentials") {
+    const token = randomUUID();
+    accessTokens.set(token, { clientId: client_id, expiresAt: Date.now() + 86_400_000 });
+    return res.json({ access_token: token, token_type: "bearer", expires_in: 86400 });
+  }
+
+  res.status(400).json({ error: "unsupported_grant_type" });
+});
 
 // Session store: sessionId -> { server, transport }
 const sessions = new Map();
