@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: zoho-mail-mcp
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ZOHO_EMAIL
+        sync: false
+      - key: ZOHO_APP_PASSWORD
+        sync: false
+      - key: ZOHO_REGION
+        value: in
+      - key: MCP_API_KEY
+        generateValue: true

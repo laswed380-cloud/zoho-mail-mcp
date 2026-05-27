@@ -1,0 +1,21 @@
+{
+  "name": "zoho-mail-mcp",
+  "version": "1.0.0",
+  "description": "Remote MCP server for Zoho Mail — connects Claude.ai to IMAP/SMTP",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.0",
+    "express": "^5.1.0",
+    "imapflow": "^1.0.190",
+    "nodemailer": "^7.0.3",
+    "zod": "^3.23.8"
+  }
+}
