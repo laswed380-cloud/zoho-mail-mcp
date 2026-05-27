@@ -241,6 +241,7 @@ function createMcpServer() {
 // ─── Express HTTP server ────────────────────────────────────────────────────
 
 const app = express();
+app.set("trust proxy", 1); // trust Fly.io / Render reverse proxy for HTTPS
 app.use(express.json());
 
 // Auth middleware — accepts API key OR valid OAuth Bearer token
