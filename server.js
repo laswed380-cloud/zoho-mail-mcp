@@ -1,5 +1,5 @@
 import express from "express";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { ImapFlow } from "imapflow";
@@ -14,9 +14,13 @@ const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID || "claude-ai";
 const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET || API_KEY;
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
-// OAuth state: code → { clientId, expiresAt }  |  token → { clientId, expiresAt }
+// Deterministic token — derived from secrets, survives server restarts
+const STATIC_TOKEN = createHash("sha256")
+  .update(`${OAUTH_CLIENT_ID}:${OAUTH_CLIENT_SECRET}:${API_KEY}`)
+  .digest("hex");
+
+// Auth codes are short-lived and in-memory (fine — codes are used once immediately)
 const authCodes = new Map();
-const accessTokens = new Map();
 
 if (!EMAIL || !PASSWORD) {
   console.error("Missing ZOHO_EMAIL or ZOHO_APP_PASSWORD");
@@ -256,11 +260,10 @@ app.use((req, res, next) => {
   // Direct API key (for Claude Code / testing)
   if (API_KEY && apiKey === API_KEY) return next();
 
-  // OAuth Bearer token
+  // OAuth Bearer token — validate against deterministic static token
   const bearer = header.replace(/^Bearer\s+/i, "");
   if (bearer) {
-    const entry = accessTokens.get(bearer);
-    if (entry && entry.expiresAt > Date.now()) return next();
+    if (bearer === STATIC_TOKEN) return next();
     return res.status(401).json({ error: "invalid_token" });
   }
 
@@ -312,15 +315,12 @@ app.post("/oauth/token", express.urlencoded({ extended: false }), (req, res) => 
       return res.status(400).json({ error: "invalid_grant" });
     }
     authCodes.delete(code);
-    const token = randomUUID();
-    accessTokens.set(token, { clientId: client_id, expiresAt: Date.now() + 86_400_000 });
-    return res.json({ access_token: token, token_type: "bearer", expires_in: 86400 });
+    // Return deterministic token — survives server restarts
+    return res.json({ access_token: STATIC_TOKEN, token_type: "bearer", expires_in: 315360000 });
   }
 
   if (grant_type === "client_credentials") {
-    const token = randomUUID();
-    accessTokens.set(token, { clientId: client_id, expiresAt: Date.now() + 86_400_000 });
-    return res.json({ access_token: token, token_type: "bearer", expires_in: 86400 });
+    return res.json({ access_token: STATIC_TOKEN, token_type: "bearer", expires_in: 315360000 });
   }
 
   res.status(400).json({ error: "unsupported_grant_type" });
